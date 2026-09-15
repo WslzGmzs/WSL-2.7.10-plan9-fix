@@ -41,10 +41,7 @@ jobs:
         run: |
           $vsPath = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Write-Host "VS Path: $vsPath"
-          & "$vsPath\Common7\Tools\VsDevCmd.bat" 2>$null
-          # Install ARM64 cross-compiler workload
-          $installer = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe"
-          & $installer modify --installPath "$vsPath" `
+          & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" modify --installPath "$vsPath" `
             --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
             --add Microsoft.VisualStudio.Component.VC.ATL.ARM64 `
             --passive --norestart --wait
@@ -234,11 +231,23 @@ jobs:
       - name: Build
         run: cmake --build . --config ${{ env.BUILD_TYPE }} --parallel
  
+      - name: Pack nupkg
+        shell: bash
+        run: |
+          NUSPEC=$(find . -name "Microsoft.WSL.PluginApi.nuspec" -type f | head -1)
+          if [ -z "$NUSPEC" ]; then
+            echo "WARNING: No .nuspec found, skipping nuget pack"
+            exit 0
+          fi
+          echo "Packing: $NUSPEC"
+          nuget pack "$NUSPEC" -OutputDirectory nupkg-output -NoPackageAnalysis -NonInteractive
+ 
       - name: Upload nupkg
         uses: actions/upload-artifact@v4
         with:
           name: nupkg
-          path: bin/**/*.nupkg
+          path: nupkg-output/*.nupkg
+          if-no-files-found: warn
           retention-days: 1
  
   release:
@@ -262,8 +271,18 @@ jobs:
           cp artifacts/build-x64/initrd.img     release/initrd-x64.img
           cp artifacts/build-arm64/init         release/init-arm64
           cp artifacts/build-arm64/initrd.img   release/initrd-arm64.img
-          cp artifacts/msixbundle/*.msixbundle  release/
-          find artifacts/nupkg/ -name '*.nupkg' -exec cp {} release/ \;
+ 
+          if ls artifacts/msixbundle/*.msixbundle 1>/dev/null 2>&1; then
+            cp artifacts/msixbundle/*.msixbundle release/
+          else
+            echo "WARNING: No msixbundle found"
+          fi
+ 
+          if [ -d artifacts/nupkg ]; then
+            find artifacts/nupkg/ -name '*.nupkg' -exec cp {} release/ \;
+          else
+            echo "WARNING: No nupkg directory found"
+          fi
  
           echo "=== Release files ==="
           ls -lh release/
