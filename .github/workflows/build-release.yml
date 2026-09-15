@@ -40,9 +40,7 @@ jobs:
         shell: bash
         run: |
           ver="${{ env.WSL_PACKAGE_VERSION }}"
-          # Strip leading 'v' if present
           ver="${ver#v}"
-          # Pad to 4 dot-separated parts
           IFS='.' read -ra P <<< "$ver"
           while [[ ${#P[@]} -lt 4 ]]; do ver="$ver.0"; IFS='.' read -ra P <<< "$ver"; done
           echo "version=$ver"
@@ -50,8 +48,8 @@ jobs:
  
       - name: Debug version
         run: |
-          echo "RAW env.WSL_PACKAGE_VERSION = ${{ env.WSL_PACKAGE_VERSION }}"
-          echo "PADDED steps.version.outputs.version = ${{ steps.version.outputs.version }}"
+          echo "RAW = ${{ env.WSL_PACKAGE_VERSION }}"
+          echo "PADDED = ${{ steps.version.outputs.version }}"
  
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -71,7 +69,7 @@ jobs:
         shell: bash
         run: |
           VER="${{ steps.version.outputs.version }}"
-          echo "=== Passing PACKAGE_VERSION=$VER to CMake ==="
+          echo "=== PACKAGE_VERSION=$VER ==="
           cmake . \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DTARGET_PLATFORM=${{ matrix.platform }} \
@@ -79,7 +77,7 @@ jobs:
             -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build
-        run: cmake --build . --parallel
+        run: cmake --build . --config ${{ env.BUILD_TYPE }} --parallel
  
       - name: Upload platform artifacts
         uses: actions/upload-artifact@v4
@@ -144,7 +142,7 @@ jobs:
         shell: bash
         run: |
           VER="${{ steps.version.outputs.version }}"
-          echo "=== Passing PACKAGE_VERSION=$VER to CMake ==="
+          echo "=== PACKAGE_VERSION=$VER ==="
           cmake . \
             -DBUNDLE_ONLY=true \
             -DPACKAGE_VERSION="$VER" \
@@ -152,7 +150,7 @@ jobs:
             -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build bundle
-        run: cmake --build . --target bundle
+        run: cmake --build . --target bundle --config ${{ env.BUILD_TYPE }}
  
       - name: Upload bundle
         uses: actions/upload-artifact@v4
@@ -201,7 +199,7 @@ jobs:
         shell: bash
         run: |
           VER="${{ steps.version.outputs.version }}"
-          echo "=== Passing PACKAGE_VERSION=$VER to CMake ==="
+          echo "=== PACKAGE_VERSION=$VER ==="
           cmake . \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DTARGET_PLATFORM=x64 \
@@ -209,7 +207,7 @@ jobs:
             -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build
-        run: cmake --build . --parallel
+        run: cmake --build . --config ${{ env.BUILD_TYPE }} --parallel
  
       - name: Upload nupkg
         uses: actions/upload-artifact@v4
