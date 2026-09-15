@@ -35,6 +35,21 @@ jobs:
         with:
           fetch-depth: 0
  
+      - name: Install ARM64 build tools
+        if: matrix.platform == 'arm64'
+        shell: pwsh
+        run: |
+          $vsPath = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Write-Host "VS Path: $vsPath"
+          & "$vsPath\Common7\Tools\VsDevCmd.bat" 2>$null
+          # Install ARM64 cross-compiler workload
+          $installer = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe"
+          & $installer modify --installPath "$vsPath" `
+            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
+            --add Microsoft.VisualStudio.Component.VC.ATL.ARM64 `
+            --passive --norestart --wait
+          Write-Host "ARM64 tools installed"
+ 
       - name: Pad version to 4 parts
         id: version
         shell: bash
@@ -69,8 +84,17 @@ jobs:
         shell: bash
         run: |
           VER="${{ steps.version.outputs.version }}"
+          PLATFORM_ARG=""
+          if [ "${{ matrix.platform }}" = "arm64" ]; then
+            PLATFORM_ARG="-A ARM64"
+          elif [ "${{ matrix.platform }}" = "x64" ]; then
+            PLATFORM_ARG="-A x64"
+          fi
           echo "=== PACKAGE_VERSION=$VER ==="
+          echo "=== PLATFORM_ARG=$PLATFORM_ARG ==="
           cmake . \
+            -G "Visual Studio 17 2022" \
+            $PLATFORM_ARG \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DTARGET_PLATFORM=${{ matrix.platform }} \
             -DPACKAGE_VERSION="$VER" \
@@ -144,6 +168,8 @@ jobs:
           VER="${{ steps.version.outputs.version }}"
           echo "=== PACKAGE_VERSION=$VER ==="
           cmake . \
+            -G "Visual Studio 17 2022" \
+            -A x64 \
             -DBUNDLE_ONLY=true \
             -DPACKAGE_VERSION="$VER" \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
@@ -183,9 +209,6 @@ jobs:
           echo "version=$ver"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
  
-      - name: Debug version
-        run: echo "PACKAGE_VERSION = ${{ steps.version.outputs.version }}"
- 
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -201,6 +224,8 @@ jobs:
           VER="${{ steps.version.outputs.version }}"
           echo "=== PACKAGE_VERSION=$VER ==="
           cmake . \
+            -G "Visual Studio 17 2022" \
+            -A x64 \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DTARGET_PLATFORM=x64 \
             -DPACKAGE_VERSION="$VER" \
