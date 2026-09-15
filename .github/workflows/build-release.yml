@@ -16,7 +16,6 @@ permissions:
  
 env:
   BUILD_TYPE: Release
-  FALLBACK_VERSION: "2.7.10.0"
  
 jobs:
   build:
@@ -27,12 +26,32 @@ jobs:
  
     runs-on: windows-2022
     timeout-minutes: 90
+    env:
+      WSL_PACKAGE_VERSION: ${{ inputs.version || github.ref_name || '2.7.10.0' }}
  
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+ 
+      - name: Pad version to 4 parts
+        id: version
+        shell: bash
+        run: |
+          ver="${{ env.WSL_PACKAGE_VERSION }}"
+          # Strip leading 'v' if present
+          ver="${ver#v}"
+          # Pad to 4 dot-separated parts
+          IFS='.' read -ra P <<< "$ver"
+          while [[ ${#P[@]} -lt 4 ]]; do ver="$ver.0"; IFS='.' read -ra P <<< "$ver"; done
+          echo "version=$ver"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+ 
+      - name: Debug version
+        run: |
+          echo "RAW env.WSL_PACKAGE_VERSION = ${{ env.WSL_PACKAGE_VERSION }}"
+          echo "PADDED steps.version.outputs.version = ${{ steps.version.outputs.version }}"
  
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -48,32 +67,16 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('packages.config', 'nuget.config') }}
           restore-keys: nuget-${{ runner.os }}-
  
-      - name: Derive version
-        id: version
+      - name: Configure CMake
         shell: bash
         run: |
-          if [[ -n "${{ inputs.version }}" ]]; then
-            ver="${{ inputs.version }}"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
-            ver="${{ github.ref_name }}"
-          else
-            ver="${{ env.FALLBACK_VERSION }}"
-          fi
-          # Pad to 4 parts
-          IFS='.' read -ra PARTS <<< "$ver"
-          while [[ ${#PARTS[@]} -lt 4 ]]; do
-            ver="$ver.0"
-            IFS='.' read -ra PARTS <<< "$ver"
-          done
-          echo "version=$ver"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
- 
-      - name: Debug version
-        run: echo "PACKAGE_VERSION=${{ steps.version.outputs.version }}"
- 
-      - name: Configure CMake
-        run: |
-          cmake . -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DTARGET_PLATFORM=${{ matrix.platform }} -DPACKAGE_VERSION=${{ steps.version.outputs.version }} -DSKIP_PACKAGE_SIGNING=true
+          VER="${{ steps.version.outputs.version }}"
+          echo "=== Passing PACKAGE_VERSION=$VER to CMake ==="
+          cmake . \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DTARGET_PLATFORM=${{ matrix.platform }} \
+            -DPACKAGE_VERSION="$VER" \
+            -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build
         run: cmake --build . --parallel
@@ -93,6 +96,8 @@ jobs:
     needs: build
     runs-on: windows-2022
     timeout-minutes: 30
+    env:
+      WSL_PACKAGE_VERSION: ${{ inputs.version || github.ref_name || '2.7.10.0' }}
  
     steps:
       - name: Checkout
@@ -100,24 +105,19 @@ jobs:
         with:
           fetch-depth: 0
  
-      - name: Derive version
+      - name: Pad version to 4 parts
         id: version
         shell: bash
         run: |
-          if [[ -n "${{ inputs.version }}" ]]; then
-            ver="${{ inputs.version }}"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
-            ver="${{ github.ref_name }}"
-          else
-            ver="${{ env.FALLBACK_VERSION }}"
-          fi
-          IFS='.' read -ra PARTS <<< "$ver"
-          while [[ ${#PARTS[@]} -lt 4 ]]; do
-            ver="$ver.0"
-            IFS='.' read -ra PARTS <<< "$ver"
-          done
+          ver="${{ env.WSL_PACKAGE_VERSION }}"
+          ver="${ver#v}"
+          IFS='.' read -ra P <<< "$ver"
+          while [[ ${#P[@]} -lt 4 ]]; do ver="$ver.0"; IFS='.' read -ra P <<< "$ver"; done
           echo "version=$ver"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
+ 
+      - name: Debug version
+        run: echo "PACKAGE_VERSION = ${{ steps.version.outputs.version }}"
  
       - name: Download x64 artifacts
         uses: actions/download-artifact@v4
@@ -141,8 +141,15 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
  
       - name: Configure CMake (bundle-only)
+        shell: bash
         run: |
-          cmake . -DBUNDLE_ONLY=true -DPACKAGE_VERSION=${{ steps.version.outputs.version }} -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DSKIP_PACKAGE_SIGNING=true
+          VER="${{ steps.version.outputs.version }}"
+          echo "=== Passing PACKAGE_VERSION=$VER to CMake ==="
+          cmake . \
+            -DBUNDLE_ONLY=true \
+            -DPACKAGE_VERSION="$VER" \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build bundle
         run: cmake --build . --target bundle
@@ -158,6 +165,8 @@ jobs:
     needs: build
     runs-on: windows-2022
     timeout-minutes: 20
+    env:
+      WSL_PACKAGE_VERSION: ${{ inputs.version || github.ref_name || '2.7.10.0' }}
  
     steps:
       - name: Checkout
@@ -165,24 +174,19 @@ jobs:
         with:
           fetch-depth: 0
  
-      - name: Derive version
+      - name: Pad version to 4 parts
         id: version
         shell: bash
         run: |
-          if [[ -n "${{ inputs.version }}" ]]; then
-            ver="${{ inputs.version }}"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
-            ver="${{ github.ref_name }}"
-          else
-            ver="${{ env.FALLBACK_VERSION }}"
-          fi
-          IFS='.' read -ra PARTS <<< "$ver"
-          while [[ ${#PARTS[@]} -lt 4 ]]; do
-            ver="$ver.0"
-            IFS='.' read -ra PARTS <<< "$ver"
-          done
+          ver="${{ env.WSL_PACKAGE_VERSION }}"
+          ver="${ver#v}"
+          IFS='.' read -ra P <<< "$ver"
+          while [[ ${#P[@]} -lt 4 ]]; do ver="$ver.0"; IFS='.' read -ra P <<< "$ver"; done
           echo "version=$ver"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
+ 
+      - name: Debug version
+        run: echo "PACKAGE_VERSION = ${{ steps.version.outputs.version }}"
  
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -194,8 +198,15 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
  
       - name: Configure CMake
+        shell: bash
         run: |
-          cmake . -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DTARGET_PLATFORM=x64 -DPACKAGE_VERSION=${{ steps.version.outputs.version }} -DSKIP_PACKAGE_SIGNING=true
+          VER="${{ steps.version.outputs.version }}"
+          echo "=== Passing PACKAGE_VERSION=$VER to CMake ==="
+          cmake . \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DTARGET_PLATFORM=x64 \
+            -DPACKAGE_VERSION="$VER" \
+            -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build
         run: cmake --build . --parallel
