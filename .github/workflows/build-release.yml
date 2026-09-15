@@ -1,0 +1,266 @@
+name: Build and Release
+ 
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (e.g. 2.7.10.0)'
+        required: false
+        type: string
+ 
+permissions:
+  contents: write
+ 
+env:
+  BUILD_TYPE: Release
+ 
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: 双平台并行构建（MSI + MSIX + init + initrd.img）
+  # ──────────────────────────────────────────────
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, arm64]
+ 
+    runs-on: windows-2022
+    timeout-minutes: 90
+ 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+ 
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+ 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('packages.config', 'nuget.config') }}
+          restore-keys: nuget-${{ runner.os }}-
+ 
+      - name: Derive version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ inputs.version }}" -ne "") {
+            $ver = "${{ inputs.version }}"
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+            $ver = "${{ github.ref_name }}" -replace '^v',''
+            if ($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { $ver = "$ver.0" }
+          } else {
+            $ver = "0.0.1.0"
+          }
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+ 
+      - name: Configure CMake
+        run: |
+          cmake . `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DTARGET_PLATFORM=${{ matrix.platform }} `
+            -DPACKAGE_VERSION=${{ steps.version.outputs.version }} `
+            -DSKIP_PACKAGE_SIGNING=true
+ 
+      - name: Build
+        run: cmake --build . --parallel
+ 
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.platform }}
+          path: |
+            bin/${{ matrix.platform }}/${{ env.BUILD_TYPE }}/wsl.msi
+            bin/${{ matrix.platform }}/${{ env.BUILD_TYPE }}/init
+            bin/${{ matrix.platform }}/${{ env.BUILD_TYPE }}/initrd.img
+            bin/${{ matrix.platform }}/${{ env.BUILD_TYPE }}/installer.msix
+          retention-days: 1
+ 
+  # ──────────────────────────────────────────────
+  # Job 2: 打 msixbundle（需要 x64 + arm64 两套 MSIX）
+  # ──────────────────────────────────────────────
+  bundle:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 30
+ 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+ 
+      - name: Download x64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-x64
+          path: bin/x64/${{ env.BUILD_TYPE }}
+ 
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-arm64
+          path: bin/arm64/${{ env.BUILD_TYPE }}
+ 
+      - name: Derive version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ inputs.version }}" -ne "") {
+            $ver = "${{ inputs.version }}"
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+            $ver = "${{ github.ref_name }}" -replace '^v',''
+            if ($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { $ver = "$ver.0" }
+          } else {
+            $ver = "0.0.1.0"
+          }
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+ 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('packages.config', 'nuget.config') }}
+          restore-keys: nuget-${{ runner.os }}-
+ 
+      - name: Configure CMake (bundle-only mode)
+        run: |
+          cmake . `
+            -DBUNDLE_ONLY=true `
+            -DPACKAGE_VERSION=${{ steps.version.outputs.version }} `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DSKIP_PACKAGE_SIGNING=true
+ 
+      - name: Build bundle
+        run: cmake --build . --target bundle
+ 
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: msixbundle
+          path: bundle/${{ env.BUILD_TYPE }}/*.msixbundle
+          retention-days: 1
+ 
+  # ──────────────────────────────────────────────
+  # Job 3: 打 nupkg（平台无关，只需 nuspec + binaries）
+  # ──────────────────────────────────────────────
+  nupkg:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 20
+ 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+ 
+      - name: Derive version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ inputs.version }}" -ne "") {
+            $ver = "${{ inputs.version }}"
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+            $ver = "${{ github.ref_name }}" -replace '^v',''
+            if ($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { $ver = "$ver.0" }
+          } else {
+            $ver = "0.0.1.0"
+          }
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+ 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('packages.config', 'nuget.config') }}
+          restore-keys: nuget-${{ runner.os }}-
+ 
+      - name: Configure CMake
+        run: |
+          cmake . `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DTARGET_PLATFORM=x64 `
+            -DPACKAGE_VERSION=${{ steps.version.outputs.version }} `
+            -DSKIP_PACKAGE_SIGNING=true
+ 
+      - name: Build nuget target
+        run: cmake --build . --parallel
+ 
+      - name: Pack nupkg
+        shell: pwsh
+        run: |
+          $nuspec = Get-ChildItem -Recurse -Filter "Microsoft.WSL.PluginApi.nuspec" | Select-Object -First 1
+          if ($nuspec) {
+            nuget pack $nuspec.FullName -OutputDirectory bin/nupkg -NoPackageAnalysis
+          }
+ 
+      - name: Upload nupkg
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: |
+            bin/nupkg/*.nupkg
+            bin/**/*.nupkg
+          retention-days: 1
+ 
+  # ──────────────────────────────────────────────
+  # Job 4: 汇总发布到 GitHub Releases
+  # ──────────────────────────────────────────────
+  release:
+    needs: [build, bundle, nupkg]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+ 
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+ 
+      - name: Organize and rename
+        run: |
+          mkdir -p release
+ 
+          # MSI
+          cp artifacts/build-x64/wsl.msi        release/wsl-x64.msi
+          cp artifacts/build-arm64/wsl.msi      release/wsl-arm64.msi
+ 
+          # init + initrd.img (双平台)
+          cp artifacts/build-x64/init           release/init-x64
+          cp artifacts/build-x64/initrd.img     release/initrd-x64.img
+          cp artifacts/build-arm64/init         release/init-arm64
+          cp artifacts/build-arm64/initrd.img   release/initrd-arm64.img
+ 
+          # msixbundle
+          cp artifacts/msixbundle/*.msixbundle  release/
+ 
+          # nupkg
+          find artifacts/nupkg/ -name '*.nupkg' -exec cp {} release/ \;
+ 
+          echo "=== Release files ==="
+          ls -lh release/
+ 
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
