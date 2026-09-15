@@ -1,0 +1,305 @@
+/*++
+
+Copyright (c) Microsoft. All rights reserved.
+
+Module Name:
+
+    relay.hpp
+
+Abstract:
+
+    This file contains function declarations for the relay worker thread routines.
+
+--*/
+
+#pragma once
+
+#include <winsock2.h>
+#include "ConsoleState.h"
+
+#define LX_RELAY_BUFFER_SIZE 0x1000
+
+namespace wsl::windows::common::relay {
+
+std::thread CreateThread(_In_ HANDLE InputHandle, _In_ HANDLE OutputHandle, _In_opt_ HANDLE ExitHandle = nullptr, _In_ size_t BufferSize = LX_RELAY_BUFFER_SIZE);
+
+std::thread CreateThread(_In_ wil::unique_handle&& InputHandle, _In_ HANDLE OutputHandle, _In_opt_ HANDLE ExitHandle = nullptr, _In_ size_t BufferSize = LX_RELAY_BUFFER_SIZE);
+
+std::thread CreateThread(_In_ HANDLE InputHandle, _In_ wil::unique_handle&& OutputHandle, _In_opt_ HANDLE ExitHandle = nullptr, _In_ size_t BufferSize = LX_RELAY_BUFFER_SIZE);
+
+std::thread CreateThread(
+    _In_ wil::unique_handle&& InputHandle,
+    _In_ wil::unique_handle&& OutputHandle,
+    _In_opt_ HANDLE ExitHandle = nullptr,
+    _In_ size_t BufferSize = LX_RELAY_BUFFER_SIZE);
+
+DWORD
+InterruptableRead(_In_ HANDLE InputHandle, _In_ gsl::span<gsl::byte> Buffer, _In_ const std::vector<HANDLE>& ExitHandles, _In_opt_ LPOVERLAPPED Overlapped = nullptr);
+
+void InterruptableRelay(_In_ HANDLE InputHandle, _In_opt_ HANDLE OutputHandle, _In_opt_ HANDLE ExitHandle = nullptr, _In_ size_t BufferSize = LX_RELAY_BUFFER_SIZE);
+
+bool InterruptableWait(_In_ HANDLE WaitObject, _In_ const std::vector<HANDLE>& ExitHandles = {});
+
+DWORD
+InterruptableWrite(_In_ HANDLE OutputHandle, _In_ gsl::span<const gsl::byte> Buffer, _In_ const std::vector<HANDLE>& ExitHandles, _In_ LPOVERLAPPED Overlapped);
+
+enum class RelayFlags
+{
+    None = 0,
+    LeftIsSocket = 1,
+    RightIsSocket = 2
+};
+
+DEFINE_ENUM_FLAG_OPERATORS(RelayFlags);
+
+void BidirectionalRelay(_In_ HANDLE LeftHandle, _In_ HANDLE RightHandle, _In_ size_t BufferSize = LX_RELAY_BUFFER_SIZE, _In_ RelayFlags Flags = RelayFlags::None);
+
+void SocketRelay(_In_ SOCKET LeftSocket, _In_ SOCKET RightSocket, _In_ size_t BufferSize = LX_RELAY_BUFFER_SIZE);
+
+class ScopedMultiRelay
+{
+public:
+    using TWriteMethod = std::function<void(size_t, const gsl::span<gsl::byte>& buffer)>;
+    ScopedMultiRelay(const std::vector<HANDLE>& Inputs, const TWriteMethod& Write, size_t BufferSize = LX_RELAY_BUFFER_SIZE);
+
+    ~ScopedMultiRelay();
+
+    ScopedMultiRelay(ScopedMultiRelay&& other) = default;
+    ScopedMultiRelay(const ScopedMultiRelay&) = delete;
+
+    ScopedMultiRelay& operator=(const ScopedMultiRelay&) = delete;
+    ScopedMultiRelay& operator=(ScopedMultiRelay&&) = delete;
+
+    // Blocks until the relaying is complete.
+    // This is useful for situations where the relay should make sure that all
+    // the content has been flushed before exiting.
+    void Sync();
+
+private:
+    void Run(const std::vector<HANDLE>& Inputs, const TWriteMethod& Write, size_t BufferSize = LX_RELAY_BUFFER_SIZE) const;
+
+    std::thread m_thread;
+    wil::unique_event m_exitEvent{wil::EventOptions::ManualReset};
+};
+
+// Helper class to relay the output of a handle to another.
+// Note: The relay can take ownership of the handles if desired.
+// Doing that will cause the handle to be released when the relaying is complete.
+
+class ScopedRelay
+{
+public:
+    template <typename TInput, typename TOutput>
+    ScopedRelay(
+        TInput&& Input, TOutput&& Output, size_t BufferSize = LX_RELAY_BUFFER_SIZE, std::function<void()>&& OnDestroy = []() {}) :
+        m_onDestroy(std::move(OnDestroy))
+    {
+        m_thread = std::thread{[this, Input = std::move(Input), Output = std::move(Output), BufferSize = BufferSize]() {
+            try
+            {
+                Run(GetUnderlyingHandle(Input), GetUnderlyingHandle(Output), BufferSize);
+            }
+            CATCH_LOG();
+        }};
+    }
+
+    ~ScopedRelay();
+
+    ScopedRelay(ScopedRelay&& other) = default;
+    ScopedRelay(const ScopedRelay&) = delete;
+
+    ScopedRelay& operator=(const ScopedRelay&) = delete;
+    ScopedRelay& operator=(ScopedRelay&&) = delete;
+
+    // Blocks until the relaying is complete.
+    // This is useful for situations where the relay should make sure that all
+    // the content has been flushed before exiting.
+    void Sync();
+
+private:
+    template <typename THandle>
+    static HANDLE GetUnderlyingHandle(THandle& handle)
+    {
+        if constexpr (std::is_same_v<std::remove_cv_t<THandle>, HANDLE>)
+        {
+            return handle;
+        }
+        else if constexpr (std::is_same_v<std::remove_cv_t<THandle>, wil::unique_handle>)
+        {
+            return handle.get();
+        }
+        else if constexpr (std::is_same_v<std::remove_cv_t<THandle>, wil::unique_socket>)
+        {
+            return reinterpret_cast<HANDLE>(handle.get());
+        }
+        else if constexpr (std::is_same_v<std::remove_cv_t<THandle>, SOCKET>)
+        {
+            return reinterpret_cast<HANDLE>(handle);
+        }
+        else
+        {
+            // If this assert fails, an invalid type was passed to ScopedRelay
+            static_assert(sizeof(THandle) != sizeof(THandle));
+        }
+    }
+
+    void Run(_In_ HANDLE Input, _In_ HANDLE Output, size_t BufferSize) const;
+
+    std::thread m_thread;
+    wil::unique_event m_exitEvent{wil::EventOptions::ManualReset};
+    std::function<void()> m_onDestroy;
+};
+
+enum class IOHandleStatus
+{
+    Standby,
+    Pending,
+    Completed
+};
+
+struct HandleWrapper
+{
+    DEFAULT_MOVABLE(HandleWrapper);
+    NON_COPYABLE(HandleWrapper)
+
+    HandleWrapper(
+        wil::unique_handle&& handle, std::function<void()>&& OnClose = []() {}) :
+        Handle(handle.get()), OwnedHandle(std::move(handle)), OnClose(std::move(OnClose))
+    {
+    }
+
+    HandleWrapper(
+        wil::unique_socket&& handle, std::function<void()>&& OnClose = []() {}) :
+        Handle((HANDLE)handle.get()), OwnedHandle(wil::unique_socket{handle.release()}), OnClose(std::move(OnClose))
+    {
+    }
+
+    HandleWrapper(
+        wil::unique_event&& handle, std::function<void()>&& OnClose = []() {}) :
+        Handle(handle.get()), OwnedHandle(wil::unique_handle{handle.release()}), OnClose(std::move(OnClose))
+    {
+    }
+
+    HandleWrapper(
+        SOCKET handle, std::function<void()>&& OnClose = []() {}) :
+        Handle(reinterpret_cast<HANDLE>(handle)), OnClose(std::move(OnClose))
+    {
+    }
+
+    HandleWrapper(HANDLE handle, std::function<void()>&& OnClose = []() {}) : Handle(handle), OnClose(std::move(OnClose))
+    {
+    }
+
+    HandleWrapper(
+        wil::unique_hfile&& handle, std::function<void()>&& OnClose = []() {}) :
+        Handle(handle.get()), OwnedHandle(wil::unique_handle{handle.release()}), OnClose(std::move(OnClose))
+    {
+    }
+
+    ~HandleWrapper()
+    {
+        Reset();
+    }
+
+    HANDLE Get() const
+    {
+        return Handle;
+    }
+
+    void Reset()
+    {
+        if (OnClose != nullptr)
+        {
+            OnClose();
+            OnClose = nullptr;
+        }
+
+        OwnedHandle = {};
+        Handle = nullptr;
+    }
+
+private:
+    HANDLE Handle{};
+    std::variant<wil::unique_handle, wil::unique_socket> OwnedHandle;
+    std::function<void()> OnClose;
+};
+
+class OverlappedIOHandle
+{
+public:
+    NON_COPYABLE(OverlappedIOHandle)
+    NON_MOVABLE(OverlappedIOHandle)
+
+    OverlappedIOHandle() = default;
+    virtual ~OverlappedIOHandle() = default;
+    virtual void Schedule() = 0;
+    virtual void Collect() = 0;
+    virtual HANDLE GetHandle() const = 0;
+    IOHandleStatus GetState() const;
+
+protected:
+    IOHandleStatus State = IOHandleStatus::Standby;
+};
+
+class EventHandle : public OverlappedIOHandle
+{
+public:
+    NON_COPYABLE(EventHandle)
+    NON_MOVABLE(EventHandle)
+
+    EventHandle(HandleWrapper&& Handle, std::function<void()>&& OnSignalled = []() {});
+    void Schedule() override;
+    void Collect() override;
+    HANDLE GetHandle() const override;
+
+private:
+    HandleWrapper Handle;
+    std::function<void()> OnSignalled;
+};
+
+class SingleAcceptHandle : public OverlappedIOHandle
+{
+public:
+    NON_COPYABLE(SingleAcceptHandle)
+    NON_MOVABLE(SingleAcceptHandle)
+
+    SingleAcceptHandle(HandleWrapper&& ListenSocket, HandleWrapper&& AcceptedSocket, std::function<void()>&& OnAccepted);
+    ~SingleAcceptHandle();
+
+    void Schedule() override;
+    void Collect() override;
+    HANDLE GetHandle() const override;
+
+private:
+    HandleWrapper ListenSocket;
+    HandleWrapper AcceptedSocket;
+    wil::unique_event Event{wil::EventOptions::ManualReset};
+    OVERLAPPED Overlapped{};
+    std::function<void()> OnAccepted;
+    char AcceptBuffer[2 * sizeof(SOCKADDR_STORAGE)];
+};
+
+class MultiHandleWait
+{
+public:
+    enum Flags
+    {
+        None = 0,
+        CancelOnCompleted = 1,
+        IgnoreErrors = 2
+    };
+
+    MultiHandleWait() = default;
+
+    void AddHandle(std::unique_ptr<OverlappedIOHandle>&& handle, Flags flags = Flags::None);
+    bool Run(std::optional<std::chrono::milliseconds> Timeout);
+    void Cancel();
+
+private:
+    std::vector<std::pair<Flags, std::unique_ptr<OverlappedIOHandle>>> m_handles;
+    bool m_cancel = false;
+};
+
+DEFINE_ENUM_FLAG_OPERATORS(MultiHandleWait::Flags);
+
+} // namespace wsl::windows::common::relay
