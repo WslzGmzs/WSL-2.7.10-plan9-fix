@@ -16,6 +16,7 @@ permissions:
  
 env:
   BUILD_TYPE: Release
+  FALLBACK_VERSION: "2.7.10.0"
  
 jobs:
   build:
@@ -49,26 +50,30 @@ jobs:
  
       - name: Derive version
         id: version
-        shell: pwsh
+        shell: bash
         run: |
-          if ("${{ inputs.version }}" -ne "") {
-            $ver = "${{ inputs.version }}"
-          } elseif ("${{ github.ref_type }}" -eq "tag") {
-            $ver = "${{ github.ref_name }}"
-          } else {
-            $ver = "2.7.10.0"
-          }
-          $parts = $ver.Split('.')
-          while ($parts.Length -lt 4) { $ver += ".0"; $parts = $ver.Split('.') }
-          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          if [[ -n "${{ inputs.version }}" ]]; then
+            ver="${{ inputs.version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            ver="${{ github.ref_name }}"
+          else
+            ver="${{ env.FALLBACK_VERSION }}"
+          fi
+          # Pad to 4 parts
+          IFS='.' read -ra PARTS <<< "$ver"
+          while [[ ${#PARTS[@]} -lt 4 ]]; do
+            ver="$ver.0"
+            IFS='.' read -ra PARTS <<< "$ver"
+          done
+          echo "version=$ver"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+ 
+      - name: Debug version
+        run: echo "PACKAGE_VERSION=${{ steps.version.outputs.version }}"
  
       - name: Configure CMake
         run: |
-          cmake . `
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-            -DTARGET_PLATFORM=${{ matrix.platform }} `
-            -DPACKAGE_VERSION=${{ steps.version.outputs.version }} `
-            -DSKIP_PACKAGE_SIGNING=true
+          cmake . -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DTARGET_PLATFORM=${{ matrix.platform }} -DPACKAGE_VERSION=${{ steps.version.outputs.version }} -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build
         run: cmake --build . --parallel
@@ -97,18 +102,22 @@ jobs:
  
       - name: Derive version
         id: version
-        shell: pwsh
+        shell: bash
         run: |
-          if ("${{ inputs.version }}" -ne "") {
-            $ver = "${{ inputs.version }}"
-          } elseif ("${{ github.ref_type }}" -eq "tag") {
-            $ver = "${{ github.ref_name }}"
-          } else {
-            $ver = "2.7.10.0"
-          }
-          $parts = $ver.Split('.')
-          while ($parts.Length -lt 4) { $ver += ".0"; $parts = $ver.Split('.') }
-          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          if [[ -n "${{ inputs.version }}" ]]; then
+            ver="${{ inputs.version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            ver="${{ github.ref_name }}"
+          else
+            ver="${{ env.FALLBACK_VERSION }}"
+          fi
+          IFS='.' read -ra PARTS <<< "$ver"
+          while [[ ${#PARTS[@]} -lt 4 ]]; do
+            ver="$ver.0"
+            IFS='.' read -ra PARTS <<< "$ver"
+          done
+          echo "version=$ver"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
  
       - name: Download x64 artifacts
         uses: actions/download-artifact@v4
@@ -133,11 +142,7 @@ jobs:
  
       - name: Configure CMake (bundle-only)
         run: |
-          cmake . `
-            -DBUNDLE_ONLY=true `
-            -DPACKAGE_VERSION=${{ steps.version.outputs.version }} `
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-            -DSKIP_PACKAGE_SIGNING=true
+          cmake . -DBUNDLE_ONLY=true -DPACKAGE_VERSION=${{ steps.version.outputs.version }} -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build bundle
         run: cmake --build . --target bundle
@@ -162,18 +167,22 @@ jobs:
  
       - name: Derive version
         id: version
-        shell: pwsh
+        shell: bash
         run: |
-          if ("${{ inputs.version }}" -ne "") {
-            $ver = "${{ inputs.version }}"
-          } elseif ("${{ github.ref_type }}" -eq "tag") {
-            $ver = "${{ github.ref_name }}"
-          } else {
-            $ver = "2.7.10.0"
-          }
-          $parts = $ver.Split('.')
-          while ($parts.Length -lt 4) { $ver += ".0"; $parts = $ver.Split('.') }
-          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          if [[ -n "${{ inputs.version }}" ]]; then
+            ver="${{ inputs.version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            ver="${{ github.ref_name }}"
+          else
+            ver="${{ env.FALLBACK_VERSION }}"
+          fi
+          IFS='.' read -ra PARTS <<< "$ver"
+          while [[ ${#PARTS[@]} -lt 4 ]]; do
+            ver="$ver.0"
+            IFS='.' read -ra PARTS <<< "$ver"
+          done
+          echo "version=$ver"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
  
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -186,11 +195,7 @@ jobs:
  
       - name: Configure CMake
         run: |
-          cmake . `
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-            -DTARGET_PLATFORM=x64 `
-            -DPACKAGE_VERSION=${{ steps.version.outputs.version }} `
-            -DSKIP_PACKAGE_SIGNING=true
+          cmake . -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DTARGET_PLATFORM=x64 -DPACKAGE_VERSION=${{ steps.version.outputs.version }} -DSKIP_PACKAGE_SIGNING=true
  
       - name: Build
         run: cmake --build . --parallel
