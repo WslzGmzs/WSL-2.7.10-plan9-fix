@@ -1,5 +1,5 @@
 name: Build and Release
- 
+
 on:
   push:
     tags:
@@ -10,31 +10,31 @@ on:
         description: 'Package version (e.g. 2.7.10.0)'
         required: false
         type: string
- 
+
 permissions:
   contents: write
- 
+
 env:
   BUILD_TYPE: Release
- 
+
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
         platform: [x64, arm64]
- 
+
     runs-on: windows-2022
     timeout-minutes: 90
     env:
       WSL_PACKAGE_VERSION: ${{ inputs.version || github.ref_name || '2.7.10.0' }}
- 
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
- 
+
       - name: Install ARM64 build tools
         if: matrix.platform == 'arm64'
         shell: pwsh
@@ -46,7 +46,7 @@ jobs:
             --add Microsoft.VisualStudio.Component.VC.ATL.ARM64 `
             --passive --norestart --wait
           Write-Host "ARM64 tools installed"
- 
+
       - name: Pad version to 4 parts
         id: version
         shell: bash
@@ -57,17 +57,17 @@ jobs:
           while [[ ${#P[@]} -lt 4 ]]; do ver="$ver.0"; IFS='.' read -ra P <<< "$ver"; done
           echo "version=$ver"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
- 
+
       - name: Debug version
         run: |
           echo "RAW = ${{ env.WSL_PACKAGE_VERSION }}"
           echo "PADDED = ${{ steps.version.outputs.version }}"
- 
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
- 
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -76,7 +76,7 @@ jobs:
             packages
           key: nuget-${{ runner.os }}-${{ hashFiles('packages.config', 'nuget.config') }}
           restore-keys: nuget-${{ runner.os }}-
- 
+
       - name: Configure CMake
         shell: bash
         run: |
@@ -96,10 +96,10 @@ jobs:
             -DTARGET_PLATFORM=${{ matrix.platform }} \
             -DPACKAGE_VERSION="$VER" \
             -DSKIP_PACKAGE_SIGNING=true
- 
+
       - name: Build
         run: cmake --build . --config ${{ env.BUILD_TYPE }} --parallel
- 
+
       - name: Upload platform artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -110,20 +110,20 @@ jobs:
             bin/${{ matrix.platform }}/${{ env.BUILD_TYPE }}/initrd.img
             bin/${{ matrix.platform }}/${{ env.BUILD_TYPE }}/installer.msix
           retention-days: 1
- 
+
   bundle:
     needs: build
     runs-on: windows-2022
     timeout-minutes: 30
     env:
       WSL_PACKAGE_VERSION: ${{ inputs.version || github.ref_name || '2.7.10.0' }}
- 
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
- 
+
       - name: Pad version to 4 parts
         id: version
         shell: bash
@@ -134,22 +134,22 @@ jobs:
           while [[ ${#P[@]} -lt 4 ]]; do ver="$ver.0"; IFS='.' read -ra P <<< "$ver"; done
           echo "version=$ver"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
- 
+
       - name: Debug version
         run: echo "PACKAGE_VERSION = ${{ steps.version.outputs.version }}"
- 
+
       - name: Download x64 artifacts
         uses: actions/download-artifact@v4
         with:
           name: build-x64
           path: bin/x64/${{ env.BUILD_TYPE }}
- 
+
       - name: Download arm64 artifacts
         uses: actions/download-artifact@v4
         with:
           name: build-arm64
           path: bin/arm64/${{ env.BUILD_TYPE }}
- 
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -158,7 +158,7 @@ jobs:
             packages
           key: nuget-${{ runner.os }}-${{ hashFiles('packages.config', 'nuget.config') }}
           restore-keys: nuget-${{ runner.os }}-
- 
+
       - name: Configure CMake (bundle-only)
         shell: bash
         run: |
@@ -171,30 +171,30 @@ jobs:
             -DPACKAGE_VERSION="$VER" \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DSKIP_PACKAGE_SIGNING=true
- 
+
       - name: Build bundle
         run: cmake --build . --target bundle --config ${{ env.BUILD_TYPE }}
- 
+
       - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
           name: msixbundle
           path: bundle/${{ env.BUILD_TYPE }}/*.msixbundle
           retention-days: 1
- 
+
   nupkg:
     needs: build
     runs-on: windows-2022
     timeout-minutes: 20
     env:
       WSL_PACKAGE_VERSION: ${{ inputs.version || github.ref_name || '2.7.10.0' }}
- 
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
- 
+
       - name: Pad version to 4 parts
         id: version
         shell: bash
@@ -205,7 +205,7 @@ jobs:
           while [[ ${#P[@]} -lt 4 ]]; do ver="$ver.0"; IFS='.' read -ra P <<< "$ver"; done
           echo "version=$ver"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
- 
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -214,7 +214,7 @@ jobs:
             packages
           key: nuget-${{ runner.os }}-${{ hashFiles('packages.config', 'nuget.config') }}
           restore-keys: nuget-${{ runner.os }}-
- 
+
       - name: Configure CMake
         shell: bash
         run: |
@@ -227,10 +227,10 @@ jobs:
             -DTARGET_PLATFORM=x64 \
             -DPACKAGE_VERSION="$VER" \
             -DSKIP_PACKAGE_SIGNING=true
- 
+
       - name: Build
         run: cmake --build . --config ${{ env.BUILD_TYPE }} --parallel
- 
+
       - name: Pack nupkg
         shell: bash
         run: |
@@ -239,9 +239,10 @@ jobs:
             echo "WARNING: No .nuspec found, skipping nuget pack"
             exit 0
           fi
-          echo "Packing: $NUSPEC"
-          nuget pack "$NUSPEC" -OutputDirectory nupkg-output -NoPackageAnalysis -NonInteractive
- 
+          VER="${{ steps.version.outputs.version }}"
+          echo "Packing: $NUSPEC with version $VER"
+          nuget pack "$NUSPEC" -Version "$VER" -OutputDirectory nupkg-output -NoPackageAnalysis -NonInteractive
+
       - name: Upload nupkg
         uses: actions/upload-artifact@v4
         with:
@@ -249,44 +250,44 @@ jobs:
           path: nupkg-output/*.nupkg
           if-no-files-found: warn
           retention-days: 1
- 
+
   release:
     needs: [build, bundle, nupkg]
     runs-on: ubuntu-latest
     timeout-minutes: 10
- 
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
- 
+
       - name: Organize and rename
         run: |
           mkdir -p release
- 
+
           cp artifacts/build-x64/wsl.msi        release/wsl-x64.msi
           cp artifacts/build-arm64/wsl.msi      release/wsl-arm64.msi
           cp artifacts/build-x64/init           release/init-x64
           cp artifacts/build-x64/initrd.img     release/initrd-x64.img
           cp artifacts/build-arm64/init         release/init-arm64
           cp artifacts/build-arm64/initrd.img   release/initrd-arm64.img
- 
+
           if ls artifacts/msixbundle/*.msixbundle 1>/dev/null 2>&1; then
             cp artifacts/msixbundle/*.msixbundle release/
           else
             echo "WARNING: No msixbundle found"
           fi
- 
+
           if [ -d artifacts/nupkg ]; then
             find artifacts/nupkg/ -name '*.nupkg' -exec cp {} release/ \;
           else
             echo "WARNING: No nupkg directory found"
           fi
- 
+
           echo "=== Release files ==="
           ls -lh release/
- 
+
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
